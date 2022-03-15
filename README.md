@@ -1,4 +1,4 @@
-# fit_cloud_point
+# fit cloud point
 Python library for fitting various shapes to point cloud in 2D
 
 This library has classes for the following shapes:
@@ -14,3 +14,9 @@ Each class can
 4) import, export and plot given shape
 
 ![Screenshot](fit_point_cloud.png)
+
+## Gallery of other plots
+![Screenshot](plots/tunnel_34.png)
+![Screenshot](plots/tunnel_35.png)
+![Screenshot](plots/tunnel_38.png)
+![Screenshot](plots/tunnel_39.png)
