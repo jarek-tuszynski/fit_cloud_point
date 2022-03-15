@@ -2,7 +2,32 @@
 """
 Created on Tue Feb 15 08:29:37 2022
 
-@author: SATuszynskiJ
+@author: Jarek Tuszynski
+
+Description:
+ 
+This file contains classes for fiting geometric figures to 2D point clouds 
+using various optimization algorithms. My specific aplication was for measuring 
+passage shapes in mines, caves, tunnels measured with lidar which creates a 
+3D point cloud. The geometric figures covered are:
+1) circle
+2) ellipse
+3) rectangle
+4) dommed tunnel segment shaped like rectangle with half an ellipse for a ceiling
+    
+Each class has some common functions:
+    1) constructor
+    2) init - "set" or initialize
+    3) get - get all the numbers as a vector
+    4) plot - plot it
+    5) norm - normalize the numbers. Make sure all the numbers that need to be 
+        positive are positive
+    6) point_cloud - create a random point cloud in the shape of this figure
+    7) distance - mean distance from a cloud of points to the figure
+    8) fit - find a shape which is the best to a cloud of points
+    9) test - test the class
+
+Individual classes might have additional metchods
 """
 import numpy as np
 import numpy.random as nr
@@ -12,9 +37,43 @@ from   matplotlib.patches import Ellipse, Rectangle, Circle, Polygon
 from numpy.linalg import norm
 
 # =============================================================================
+# === base class with some common functions
+# =============================================================================
+class base_pc:
+    
+    @staticmethod
+    def pts2line(pt, a, b):
+        '''
+        distance from point "p" to a line segment defined by endpoints a, b
+        '''
+        v = b-a
+        u = pt-a
+        m = norm(v) # length of v
+        t = np.dot(u/m, v/m)
+        t = np.clip(t, 0, 1)
+        d = norm(np.outer(t,v) - u, axis=1)  # t*v is the nearest point; d is a distance from it to pt
+        return d[..., None]
+
+    @staticmethod
+    def envelope(points):
+        x = points[:,0]
+        y = points[:,1]
+        minx = min(x)
+        miny = min(y)
+        return np.array([minx, miny, max(x)-minx, max(y)-miny])
+    
+    def plot_init(self, points):
+        plt.plot(points[:,0], points[:,1], 'b.', zorder=1)
+        plt.axis('equal')
+        plt.axis('off')
+        ax = plt.gca()
+        self.plot(ax, 'r')
+        return ax
+    
+# =============================================================================
 # === circle class
 # =============================================================================
-class circle_pc:
+class circle_pc(base_pc):
     # circle is (x-k)^2 + (y-m)^2 = r^2
     
     #--------------------------------------------------------------------------
@@ -24,14 +83,20 @@ class circle_pc:
     #--------------------------------------------------------------------------
     def init(self, xyr):
         self.k, self.m, self.r = xyr[0], xyr[1], xyr[2]
+        self.norm()
     
     #--------------------------------------------------------------------------
     def get(self):
         return np.array([self.k, self.m, self.r])
 
     #--------------------------------------------------------------------------
+    def norm(self):
+        if self.r is not None:
+            self.r = abs(self.r)
+
+    #--------------------------------------------------------------------------
     def plot(self, ax, color='g'):
-        ax.add_patch(Circle((self.k, self.m), self.r, edgecolor=color, lw=2, 
+        return ax.add_patch(Circle((self.k, self.m), self.r, edgecolor=color, lw=2, 
                       fc='None', zorder=2))
     
     #--------------------------------------------------------------------------
@@ -77,32 +142,26 @@ class circle_pc:
         p0 = [-50, 50, 30]
         self.init(p0)
 
-        n_point = 500  # number of points
-        sigma   = 5    # randomness
-        fraction = 0.8
-        points  = self.point_cloud(n_point, sigma, fraction)
-        d0 = self.distance(points)
-
-    
+        n_point  = 500  # number of points
+        sigma    = 5    # randomness
+        fraction = 0.8  # fraction of the figure
+        points   = self.point_cloud(n_point, sigma, fraction)
+        d0 = self.distance(points)   
         if display:
-            plt.plot(points[:,0], points[:,1], 'b.', zorder=1)
-            plt.axis('equal')
-            ax = plt.gca()
-            self.plot(ax, 'r')
+            ax = self.plot_init(points)
         
         self.fit(points)
         p1 = self.get().astype(int)
         d1 = self.distance(points)
         print(p0, p1, d1/d0)
-        assert d1/d0<1.05, 'circle test failed'
+        assert d1/d0<1.2, 'circle test failed'
         if display:
             self.plot(ax, 'g')
-
 
 # =============================================================================
 # === ellipse class
 # =============================================================================
-class ellipse_pc:
+class ellipse_pc(base_pc):
     # ellipse defined as (x-k)^2/a^2 + (y-m)^2/b^2 = 1
 
     #--------------------------------------------------------------------------
@@ -112,14 +171,22 @@ class ellipse_pc:
     #--------------------------------------------------------------------------
     def init(self, xyab):
         self.k, self.m, self.a, self.b = xyab[0], xyab[1], xyab[2], xyab[3]
+        self.norm()
     
     #--------------------------------------------------------------------------
     def get(self):
         return np.array([self.k, self.m, self.a, self.b])
 
     #--------------------------------------------------------------------------
+    def norm(self):
+        if self.a is not None:
+           self.a = abs(self.a)
+        if self.b is not None:
+           self.b = abs(self.b)
+       
+    #--------------------------------------------------------------------------
     def plot(self, ax, color='g'):
-        ax.add_patch(Ellipse(xy=(self.k, self.m), width=2*self.a, height=2*self.b, 
+        return ax.add_patch(Ellipse(xy=(self.k, self.m), width=2*self.a, height=2*self.b, 
                        edgecolor=color, lw=2, fc='None', zorder=2))
 
     #--------------------------------------------------------------------------
@@ -131,32 +198,70 @@ class ellipse_pc:
         return origin + ellipse + noise   
     
     #--------------------------------------------------------------------------
-    def distance(self, points):
+    def distance(self, points, alg='vectorized'):
         '''
         mean of distances from point array "points" to an ellipse defined by array 
         xyab =[k, m, a, b] where ellipse is (x-k)^2/a^2 + (y-m)^2/b^2 = 1
         '''
-        d_sum = 0
-        for pt in points: 
-            e = self.closest_point(pt)
-            d_sum += norm(pt-e)   
-        return d_sum / points.shape[0]  
+        if alg=='vectorized':
+            mag  = lambda x: norm(x, axis=1, keepdims=1) # magnitude of each row vector
+            unit = lambda x: x / (mag(x)[:,[0,0]])
+            origin = np.array([self.k, self.m])
+            a, b = self.a, self.b
+            c = a*a - b*b
+            g = np.array([c/a, -c/b])
+            f = np.array([a, b])
+            p = np.abs(points-origin) # point in top right quarter
+            t = np.ones_like(p)       # start with a guess point at 45 deg
+            
+            for i in range(2):
+                d = f * unit(t)   # current best guess about location of the closest point
+                e = g * t**3 
+                q = p-e
+                r = mag(d-e) * unit(q)
+                t = (r + e)/f
+                t = np.clip(t, 0, 1)
+            
+            d = f * unit(t)   # current best guess about location of the closest point
+            return norm(d - p, axis=1).mean()
+        else: # slower one-by-one approach used for debugging
+            d_sum = 0
+            for pt in points: 
+                e = self.closest_point(pt)
+                d_sum += norm(pt-e)   
+            return d_sum / points.shape[0]  
+
     
     #--------------------------------------------------------------------------
     def fit(self, points):
         '''
-        fit a ellipse to a point cloud data
+        fit a ellipse to a point cloud data. First try least square metchod 
+        and if it does not converge use slower 4D simplex approach
         '''
         x = points[:,0]
         y = points[:,1]
         one = np.ones_like(x)
         A = np.column_stack([x*x, y*y, x, y])
         t = np.linalg.lstsq(A,one,rcond=None)[0].squeeze() # solve least square ||At-1||^2
-        # from t[0] *x^2 + t[1] *y^2 + t[2] *x + t[3] *y = 1 get m, k , a, b
+        # solved t[0] *x^2 + t[1] *y^2 + t[2] *x + t[3] *y = 1 for t
         success = self._convert(t)
-        if not success:
-            t = circle_pc().fit(points)  
-            self.init(t[0], t[1], t[2], t[2])
+        if  success: 
+            return self.get()
+        else:                       # least square did not work
+            return self.fit2(points) # so try 4D simplex approach
+    
+    #--------------------------------------------------------------------------
+    def fit2(self, points):
+        '''
+        fit a ellipse to a point cloud data, using slower 4D simplex approach
+        '''       
+        def pts2ellipse(xyab, points):
+            return ellipse_pc(xyab).distance(points)
+
+        t   = circle_pc().fit(points)  
+        t0  = np.array([t[0], t[1], t[2], t[2]])
+        res = minimize(pts2ellipse, t0, args=points, method='Nelder-Mead', options={'xatol':0.05})
+        self.init(res['x']) 
         return self.get()
         
     #--------------------------------------------------------------------------
@@ -207,7 +312,7 @@ class ellipse_pc:
         p = np.abs(p0-origin) # point in top right quarter
         t = 0.7071 * np.ones((2))
         
-        for i in range(3):
+        for i in range(2):
             d = f * t     # current best guess about location of the closest point
             e = g * t**3
             r = d-e
@@ -226,28 +331,24 @@ class ellipse_pc:
 
         n_point = 500  # number of points
         sigma   = 5    # randomness
-        fraction = 0.8
+        fraction = 0.8 # fraction of the figure
         points  = self.point_cloud(n_point, sigma, fraction)
         d0 = self.distance(points)
 
-    
         if display:
-            plt.plot(points[:,0], points[:,1], 'b.', zorder=1)
-            plt.axis('equal')
-            ax = plt.gca()
-            self.plot(ax, 'r')
+            ax = self.plot_init(points)
         
         p1 = self.fit(points).astype(int)
         d1 = self.distance(points)
         print(p0, p1, d1/d0)
-        assert d1/d0<1.05, 'ellipse test failed'
+        assert d1/d0<1.2, 'ellipse test failed'
         if display:
             self.plot(ax, 'g')
     
 # =============================================================================
 # === rectangle class
 # =============================================================================
-class rectangle_pc:
+class rectangle_pc(base_pc):
     # rectangle is defined by left, bottom point and width/height
             
     #--------------------------------------------------------------------------
@@ -257,14 +358,22 @@ class rectangle_pc:
     #--------------------------------------------------------------------------
     def init(self, lbwh):
         self.l, self.b, self.w, self.h = lbwh[0], lbwh[1], lbwh[2], lbwh[3]
+        self.norm()
     
     #--------------------------------------------------------------------------
     def get(self):
         return np.array([self.l, self.b, self.w, self.h ])
 
     #--------------------------------------------------------------------------
+    def norm(self):
+        if self.w is not None:
+            self.w = abs(self.w)
+        if self.h is not None:
+            self.h = abs(self.h)
+
+    #--------------------------------------------------------------------------
     def plot(self, ax, color='g'):
-        ax.add_patch(Rectangle(xy=(self.l, self.b), width=self.w, height=self.h, 
+        return ax.add_patch(Rectangle(xy=(self.l, self.b), width=self.w, height=self.h, 
                          edgecolor=color, lw=2, fc='None', zorder=2))
 
     #--------------------------------------------------------------------------
@@ -286,7 +395,7 @@ class rectangle_pc:
     def point_cloud(self, n, sigma, fraction):
         p = self._perimeter(n)
         a, b, c, d = self._get_corners()
-        straigh_edge = lambda p, q, m:  p + (q-p) * nr.random((m,2)) +  sigma * nr.normal(size=(m,2))
+        straigh_edge = lambda p, q, m:  p + np.outer(nr.random((m,1)), q-p) 
         k = round(fraction*4)+1
         p1 = straigh_edge(a, b, p[0])
         p2 = straigh_edge(b, c, p[1])
@@ -294,7 +403,7 @@ class rectangle_pc:
             p3 = straigh_edge(c, d, p[2])
         if k>=4:       
             p4 = straigh_edge(d, a, p[3])
-        points = np.vstack((p1, p2, p3, p4))
+        points = np.vstack((p1, p2, p3, p4)) + sigma * nr.normal(size=(n,2))
         return points  
     
     #--------------------------------------------------------------------------
@@ -309,18 +418,20 @@ class rectangle_pc:
         also returns panalty for imbalenced fit, when most points fit one edge
         '''             
         a, b, c, d = self._get_corners()
-        d1 = pts2line(points, a, b)
-        d2 = pts2line(points, b, c)
-        d3 = pts2line(points, c, d)
-        d4 = pts2line(points, d, a)
+        d1 = self.pts2line(points, a, b)
+        d2 = self.pts2line(points, b, c)
+        d3 = self.pts2line(points, c, d)
+        d4 = self.pts2line(points, d, a)
         dist = np.hstack((d1, d2, d3, d4))
         d_mean = dist.min(axis=1).mean()
         
         n_point = points.shape[0]
         count1  = np.bincount(dist.argmin(axis=1), minlength=4)  # actual count
         count0  = self._perimeter(n_point)  # expected count based on equal distribution
-        balance = np.sum(np.abs(count1 - count0))/n_point # fraction of the points in the wrong bin
-        #balance = (max(count)-min(count))/sum(count)
+        dc = np.abs(count1 - count0)
+        balance = np.sum(dc)/n_point # fraction of the points in the wrong bin
+        if min(dc)==0:
+            balance *= 0
         return np.array([d_mean, d_mean*balance])
           
     #--------------------------------------------------------------------------
@@ -333,12 +444,14 @@ class rectangle_pc:
             d = rectangle_pc(ltwh)._distance_balance(points)
             return d.sum()
 
-        #f = ellipse_pc()
         t = ellipse_pc().fit(points)
         f = 0.9
         t0 = np.array([t[0]-f*t[2], t[1]-f*t[3], 2*f*t[2], 2*f*t[3]])    
+        t1 = self.envelope(points)  # find an envelope        
+        t  = np.hstack((np.maximum(t0, t1)[:2], np.minimum(t0, t1)[2:] ))
+        
         #res = minimize(pts2rectangle, t0, args=points, method='Nelder-Mead', options={'xatol':0.05})
-        res = minimize(pts2rectangle, t0, args=points, method='Powell', options={'xtol':0.05})
+        res = minimize(pts2rectangle, t, args=points, method='Powell', options={'xtol':0.05})
         self.init(res['x'])
         return self.get()
     
@@ -353,17 +466,13 @@ class rectangle_pc:
         points  = self.point_cloud(n_point, sigma, fraction)
         d0 = self.distance(points)
 
-    
         if display:
-            plt.plot(points[:,0], points[:,1], 'b.', zorder=1)
-            plt.axis('equal')
-            ax = plt.gca()
-            self.plot(ax, 'r')
+            ax = self.plot_init(points)
         
         p1 = self.fit(points).astype(int)
         d1 = self.distance(points)
         print(p0, p1, d1/d0)
-        assert d1/d0<1.05, 'rectangle test failed'
+        assert d1/d0<1.2, 'rectangle test failed'
         if display:
             self.plot(ax,'g')
         
@@ -371,7 +480,7 @@ class rectangle_pc:
 # =============================================================================
 # === tunnel class
 # =============================================================================
-class tunnel_pc:
+class tunnel_pc(base_pc):
     '''rectangle is defined by left, bottom point, width & height of the lower 
     # section and height of the dome modeled as a half of a n ellipse '''
             
@@ -382,10 +491,20 @@ class tunnel_pc:
     #--------------------------------------------------------------------------
     def init(self, t):
         self.l, self.b, self.w, self.h, self.d = t[0], t[1], t[2], t[3], t[4]
+        self.norm()
     
     #--------------------------------------------------------------------------
     def get(self):
         return np.array([self.l, self.b, self.w, self.h, self.d ])
+    
+    #--------------------------------------------------------------------------
+    def norm(self):
+        if self.w is not None:
+            self.w = abs(self.w)
+        if self.h is not None:
+            self.h = abs(self.h)
+        if self.d is not None:
+            self.d = abs(self.d)
 
     #--------------------------------------------------------------------------
     def plot(self, ax, color='g'):
@@ -422,7 +541,7 @@ class tunnel_pc:
 
     #--------------------------------------------------------------------------
     def point_cloud(self, n, sigma, fraction):
-        straigh_edge = lambda p, q, m:  p + (q-p) * nr.random((m,2)) +  sigma * nr.normal(size=(m,2))
+        straigh_edge = lambda p, q, m:  p + np.outer(nr.random((m,1)), q-p) 
         m = self._perimeter(n)
       
         a, b, c, d = self._get_corners()
@@ -433,7 +552,7 @@ class tunnel_pc:
             p3 = straigh_edge(c, d, m[2])
         if k>=4:       
             p4 = straigh_edge(d, a, m[3])
-        points = np.vstack((p1, p2, p3, p4))
+        points = np.vstack((p1, p2, p3, p4)) + sigma * nr.normal(size=(n,2))
         return points  
     
     #--------------------------------------------------------------------------
@@ -448,18 +567,20 @@ class tunnel_pc:
         also returns panalty for imbalenced fit, when most points fit one edge
         '''             
         a, b, c, d = self._get_corners()
-        d1 = pts2line(points, a, b)       
+        d1 = self.pts2line(points, a, b)       
         d2 = self.pts2dome(points, (b+c)/2 )      
-        d3 = pts2line(points, c, d)
-        d4 = pts2line(points, d, a)
+        d3 = self.pts2line(points, c, d)
+        d4 = self.pts2line(points, d, a)
         dist = np.hstack((d1, d2, d3, d4))
         d_mean = dist.min(axis=1).mean()
         
         n_point = points.shape[0]
         count1  = np.bincount(dist.argmin(axis=1), minlength=4)  # actual count
         count0  = self._perimeter(n_point)  # expected count based on equal distribution
-        balance = np.sum(np.abs(count1 - count0))/n_point # fraction of the points in the wrong bin
-        
+        dc = np.abs(count1 - count0)
+        balance = np.sum(dc)/n_point # fraction of the points in the wrong bin
+        if min(dc)==0:
+            balance *= 0        
         return np.array([d_mean, d_mean*balance])
     
     #--------------------------------------------------------------------------
@@ -492,9 +613,17 @@ class tunnel_pc:
         return d
         
     #--------------------------------------------------------------------------
-    def fit2(self, points):
+    def fit(self, points, alg='2-stage'):
+        if alg=='2-stage':
+            return self._fit_2_stage(points)
+        elif alg=='1-stage':
+            return self._fit_1_stage(points)
+        
+    #--------------------------------------------------------------------------
+    def _fit_1_stage(self, points):
         '''
-        use iterative optimization function to find a rectangle that best fits the data    
+        Use iterative optimization function to find a rectangle that best fits the data 
+        This approach uses 5D simplex algorithm 
         '''
         def pts2tunnel(ltwhd, points):
             d = tunnel_pc(ltwhd)._distance_balance(points)
@@ -502,24 +631,41 @@ class tunnel_pc:
 
         t = ellipse_pc().fit(points)
         f = 0.9
-        t0 = np.array([t[0]-f*t[2], t[1]-f*t[3], 2*f*t[2], f*t[3], f*t[3]])    
-        res = minimize(pts2tunnel, t0, args=points, method='Nelder-Mead', options={'xatol':0.05})
+        t1 = np.array([t[0]-f*t[2], t[1]-f*t[3], 2*f*t[2], 2*f*t[3]])    
+        t2 = self.envelope(points)  # find an envelope        
+        t0  = np.hstack((np.maximum(t1, t2)[:2], np.minimum(t1, t2)[2:] ))
+
+        options={'xatol':0.05}
+        res = minimize(pts2tunnel, t0, args=points, method='Nelder-Mead', options=options)
         self.init(res['x'])
         return self.get()
     
     #--------------------------------------------------------------------------
-    def fit(self, points):
+    def _fit_2_stage(self, points):
         '''
-        use iterative optimization function to find a rectangle that best fits the data    
+        Use iterative optimization function to find a rectangle that best fits the data    
+        This approach uses 2 optimization steps:
+            1) fit a rectangle (using 4D simplex) and lock in left right and bottom edge
+            2) fit a tunnal segment where only height of the rectangle and 
+               height of the dome is allowed to change (use 2D simplex)
         '''
-        t = rectangle_pc().fit(points)
-        def pts2tunnel(hd, points):            
+        # stage #1 fit a rectangle
+        rect = rectangle_pc()
+        t = rect.fit(points)       # fit a rectangle (using 4D simplex)
+        #dr = rect.distance(points)
+        
+        # stage #2 find the optimal roof shape
+        def pts2tunnel(hd, points):     
+            # keep lower left corner and width constant and optimize rectangle vs dome height
             ltwhd = [t[0], t[1], t[2], hd[0], hd[1]]
             d = tunnel_pc(ltwhd)._distance_balance(points)
             return d.sum() # add the mean distance and a measure adding panalty for badly balanced fit
-
-        t0 = np.array([t[3]/2, t[3]/2])    
-        res = minimize(pts2tunnel, t0, args=points, method='Nelder-Mead', options={'xatol':0.05})
+        
+        
+        hr = t[3] # height of best fit rectangle
+        t0 = np.array([hr/2, hr/2]) # initial best guess
+        options={'xatol':0.05}
+        res = minimize(pts2tunnel, t0, args=points, method='Nelder-Mead', options=options)
         hd = res['x']
         self.init([t[0], t[1], t[2], hd[0], hd[1]])
         return self.get()
@@ -530,7 +676,7 @@ class tunnel_pc:
         self.init(p0)
 
         n_point = 500  # number of points
-        sigma   = 4    # randomness
+        sigma   = 2    # randomness
         fraction = 1
         points  = self.point_cloud(n_point, sigma, fraction)
         d0 = self.distance(points)
@@ -542,16 +688,9 @@ class tunnel_pc:
             plt.ylim([-70,100])
             ax = plt.gca()
             h2 = self.plot(ax,'r')
-        
-            # el = ellipse_pc()
-            # el.fit(points)
-            # el.plot(ax, 'c')
-            # t = el.get()
-            # t0 = np.array([t[0]-t[2], t[1]-t[3], 2*t[2], t[3], t[3]])  
-            # self.init(t0)
-            # self.plot(ax,'m')
-
-        p1 = self.fit(points).astype(int)
+            
+        alg = '2-stage'
+        p1 = self.fit(points, alg).astype(int)
         d1 = self.distance(points)
         print(p0, p1, d1/d0)
         assert d1/d0<1.05, 'tunnel test failed'
@@ -559,39 +698,16 @@ class tunnel_pc:
             h3 = self.plot(ax, 'g')
             ax.legend((h1[0], h2, h3), ('point cloud', 'original', 'best fit'), 
                       loc='lower center', ncol=3, bbox_to_anchor=(0.5, -0.07))
-        
-
-# =============================================================================
-# === point to simple shape functions
-# =============================================================================
-def pts2line(pt, a, b):
-    '''
-    distance from point "p" to a line segment defined by endpoints a, b
-    '''
-    v = b-a
-    u = pt-a
-    m = norm(v) # length of v
-    t = np.dot(u/m, v/m)
-    t = np.clip(t, 0, 1)
-    d = norm(np.outer(t,v) - u, axis=1)  # t*v is the nearest point; d is a distance from it to pt
-    return d[..., None]
-
     
 # ============================================= ================================
 def self_test():
     display = True
     tol = 1.1 # 10% diviation from the original is allowed
-    f = circle_pc()
-    f.test(display, tol)
-
-    f = ellipse_pc()
-    f.test(display, tol)
     
-    f = rectangle_pc()
-    f.test(display, tol)
-    
-    f = tunnel_pc()
-    f.test(display, tol)
+    circle_pc().test(display, tol)
+    ellipse_pc().test(display, tol)  
+    rectangle_pc().test(display, tol)    
+    tunnel_pc().test(display, tol)
     if display:
         plt.savefig('point cloud fit.png', dpi=199)
     
